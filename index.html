@@ -1,0 +1,186 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Calendar with SimplyBook Integration</title>
+
+    <!-- Include FullCalendar Scheduler CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/fullcalendar-scheduler@6.1.15/index.global.min.css" rel="stylesheet" />
+    <script src="https://cdn.jsdelivr.net/npm/fullcalendar-scheduler@6.1.15/index.global.min.js"></script>
+    <!-- Include jQuery -->
+    <script src="https://ajax.googleapis.com/ajax/libs/jquery/3.5.1/jquery.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/luxon@3/build/global/luxon.min.js"></script>
+</head>
+<body>
+
+<div id="calendar"></div>
+
+<script>
+$(document).ready(function () {
+    console.log("Initializing FullCalendar with SimplyBook API...");
+
+    var calendarEl = document.getElementById('calendar');
+    var calendar = new FullCalendar.Calendar(calendarEl, {
+        schedulerLicenseKey: 'CC-Attribution-NonCommercial-NoDerivatives',
+        initialView: 'resourceTimeGridDay',
+        initialDate: '2024-10-29',
+        timeZone: 'Australia/Sydney',
+        headerToolbar: {
+            left: 'resourceTimeGridDay,resourceTimeGridThreeDay',
+            center: 'title',
+            right: 'prev,next'
+        },
+        views: {
+            resourceTimeGridThreeDay: {
+                type: 'resourceTimeGrid',
+                duration: { days: 3 },
+                buttonText: '3 Days'
+            },
+            resourceTimeGridDay: {
+                type: 'resourceTimeGrid',
+                duration: { days: 1 },
+                buttonText: '1 Day'
+            }
+        },
+        resources: getHardcodedResources(),
+        events: function (info, successCallback, failureCallback) {
+            // Load events and integrate available units from SimplyBook API
+            loadSimplyBookEvents(successCallback, failureCallback);
+        },
+        eventContent: function (arg) {
+            if (arg.event && arg.event.title) {
+                return {
+                    html: `<div class="fc-event-content">
+                                <div class="fc-event-title">${arg.event.title}</div>
+                                <div class="fc-event-slots">Slots Available: ${arg.event.extendedProps.availableUnits || arg.event.extendedProps.bookings_limit}</div>
+                            </div>`
+                };
+            } else {
+                return { html: '<div class="fc-event-content"><div class="fc-event-title">Invalid Event</div></div>' };
+            }
+        }
+    });
+
+    calendar.render();
+
+    // Function to load events and integrate available units
+    function loadSimplyBookEvents(successCallback, failureCallback) {
+        $.getJSON('/events_data.json', function(eventData) {
+            const events = eventData;
+            const calendarEvents = processEvents(events);
+            successCallback(calendarEvents);
+        }).catch(error => {
+            console.error("Error loading events:", error);
+            failureCallback(error);
+        });
+    }
+
+    // Process events and fetch available units for each
+    function processEvents(events) {
+        const calendarEvents = [];
+
+        events.forEach(event => {
+            const date = '2024-10-29';  // You can dynamically set the date as needed
+            const eventId = event.id;
+            const unitId = event.providers[0];  // Assuming a single provider for simplicity
+            const bookingsLimit = event.bookings_limit;
+
+            fetchAvailableUnits(eventId, date, unitId)
+                .then(availableUnits => {
+                    event.timeMatrix.forEach(timeMatrix => {
+                        Object.entries(timeMatrix.timeslots).forEach(([date, slots]) => {
+                            slots.forEach(slot => {
+                                const startDateTime = `${date}T${slot}`;
+                                const endDateTime = luxon.DateTime.fromISO(startDateTime).plus({ minutes: parseInt(event.duration) }).toISO();
+                                calendarEvents.push({
+                                    id: event.id,
+                                    title: event.name,
+                                    start: startDateTime,
+                                    end: endDateTime,
+                                    resourceId: timeMatrix.provider_id,
+                                    description: event.description || '',
+                                    bookings_limit: bookingsLimit, 
+                                    availableUnits: availableUnits.length, // Replace 'Slots Available' with actual available units
+                                    extendedProps: {
+                                        bookings_limit: bookingsLimit,
+                                        availableUnits: availableUnits.length
+                                    }
+                                });
+                            });
+                        });
+                    });
+                })
+                .catch(error => {
+                    console.error("Error fetching available units:", error);
+                });
+        });
+
+        return calendarEvents;
+    }
+
+    // Fetch available units using SimplyBook API
+    function fetchAvailableUnits(eventId, dateTime, unitId) {
+        return new Promise((resolve, reject) => {
+            const token = '2b09dc7aee0f1f9d4bdd7f8ae39aa51e1ed13e833d67354b61ef643e8d4947d8'; // API token
+
+            var client = new JSONRpcClient({
+                'url': 'https://user-api.simplybook.me',
+                'headers': {
+                    'X-Company-Login': 'thefreshlifeconference',
+                    'X-Token': token
+                },
+                'onerror': function (error) {
+                    console.error("Error fetching available units:", error);
+                    reject(error);
+                }
+            });
+
+            client.request('getAvailableUnits', [eventId, dateTime, 1, unitId, []], function (availableUnits) {
+                if (availableUnits && availableUnits.length > 0) {
+                    resolve(availableUnits);
+                } else {
+                    resolve([]); // No units available
+                }
+            }, function (error) {
+                reject(error);
+            });
+        });
+    }
+
+    // Hardcoded resources function
+    function getHardcodedResources() {
+        return [
+            { id: '29', title: 'Woodlands Stage', category: 'Program', order_id: 'a', logo: ' ' },
+            { id: '30', title: 'Fresh Lounge', category: 'Program', order_id: 'b', logo: ' ' },
+            { id: '8', title: 'Merz | Room 1', category: 'Training Suites', order_id: 'c', logo: 'Merz.png' },
+            { id: '23', title: 'Merz | Room 2', category: 'Training Suites', order_id: 'd', logo: 'Merz.png' },
+            { id: '2', title: 'Galderma | Room 1', category: 'Training Suites', order_id: 'e', logo: 'Galderma.png' },
+            { id: '24', title: 'Galderma | Room 2', category: 'Training Suites', order_id: 'f', logo: 'Galderma.png' },
+            { id: '3', title: 'Allergan', category: 'Training Suites', order_id: 'g', logo: 'Allergan.png' },
+            { id: '4', title: 'Evolus', category: 'Training Suites', order_id: 'h', logo: 'Evolus.png' },
+            { id: '7', title: 'Candela', category: 'Training Suites', order_id: 'i', logo: 'Candela.png' },
+            { id: '14', title: 'Cryomed', category: 'Training Suites', order_id: 'j', logo: 'Cryomed.png' },
+            { id: '13', title: 'Dermocosmetica | Room 1', category: 'Training Suites', order_id: 'k', logo: 'Dermocosmetica.png' },
+            { id: '25', title: 'Dermocosmetica | Room 2', category: 'Training Suites', order_id: 'l', logo: 'Dermocosmetica.png' },
+            { id: '9', title: 'EnVogue', category: 'Training Suites', order_id: 'm', logo: 'enVogue.png' },
+            { id: '10', title: 'Hugel', category: 'Training Suites', order_id: 'n', logo: 'Hugel.png' },
+            { id: '26', title: 'Rejuran', category: 'Training Suites', order_id: 'o', logo: 'Rejuran.png' },
+            { id: '11', title: 'Teoxane', category: 'Training Suites', order_id: 'p', logo: 'Teoxane.png' },
+            { id: '12', title: 'Xytide', category: 'Training Suites', order_id: 'q', logo: 'Xytide.png' },
+            { id: '15', title: 'Fresh Clinics | Room 1', category: 'Training Suites', order_id: 'r', logo: 'Fresh-Clinics.png' },
+            { id: '27', title: 'Fresh Clinics | Room 2', category: 'Training Suites', order_id: 's', logo: 'Fresh-Clinics.png' },
+            { id: '31', title: 'Laser & Skin Training', category: 'Training Suites', order_id: 't', logo: 'Laser-Skin-Training.png' },
+            { id: '20', title: 'Venus Concept', category: 'Activations Hub', order_id: 'u', logo: 'Venus.png' },
+            { id: '19', title: 'Advanced Skin Technology', category: 'Activations Hub', order_id: 'v', logo: 'AST.png' },
+            { id: '22', title: 'Fresh Tech Hub', category: 'Activations Hub', order_id: 'w', logo: 'fresh-tech-hub.png' },
+            { id: '18', title: 'The Skincare Company', category: 'Activations Hub', order_id: 'x', logo: 'Skincare-Company.png' },
+            { id: '21', title: 'Wellness Sessions', category: 'Wellness & Spa', order_id: 'y', logo: ' ' },
+            { id: '16', title: 'The Fresh Spa', category: 'Wellness & Spa', order_id: 'z', logo: ' ' }
+        ];
+    }
+});
+</script>
+
+</body>
+</html>

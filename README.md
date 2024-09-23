@@ -1,0 +1,1 @@
+# fullcalendar-hardcoded-events
